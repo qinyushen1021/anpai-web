@@ -2,100 +2,80 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#f2f2f7" />
-    <meta name="description" content="安排：把随便变成一个去处。" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f5f5f3" />
+    <meta name="description" content="安排：吃、喝、玩，直接给你一个附近去处。" />
     <link rel="icon" href="/app-icon.png" />
-    <title>安排 · 把随便变成一个去处</title>
-    <script type="module" crossorigin src="/index-0zQVxkQ5.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-BdeKsc2L.css">
+    <link rel="stylesheet" href="/style.css" />
+    <title>安排</title>
   </head>
   <body>
-    <main class="app-shell">
-      <header class="app-header">
-        <img class="app-mark" src="/app-icon.png" alt="" width="42" height="42" />
-        <div class="brand-copy">
-          <h1>安排</h1>
-          <p>把“随便”变成一个去处</p>
-        </div>
-        <div class="header-actions">
-          <button class="circle-button" id="preferencesButton" type="button" aria-label="我的偏好">
-            <i class="ph ph-sliders-horizontal" aria-hidden="true"></i><span class="preference-dot hidden"></span>
-          </button>
-          <button class="circle-button" id="favoritesButton" type="button" aria-label="收藏">
-            <i class="ph ph-bookmark-simple" aria-hidden="true"></i>
-          </button>
-        </div>
-        <span class="header-status" id="headerStatus">等位置</span>
+    <main class="app" id="app">
+      <header class="topbar">
+        <div class="brand"><img src="/app-icon.png" alt="" /><div><strong>安排</strong><span>不用再说随便</span></div></div>
+        <button class="location-button" id="locationButton" type="button"><span class="location-mark"></span><span id="locationText">获取位置</span></button>
       </header>
 
-      <nav class="category-tabs" aria-label="想做什么">
-        <button class="category-tab active" data-mood="food" type="button"><i class="ph ph-fork-knife" aria-hidden="true"></i><span>吃</span></button>
-        <button class="category-tab" data-mood="drink" type="button"><i class="ph ph-wine" aria-hidden="true"></i><span>喝</span></button>
-        <button class="category-tab" data-mood="play" type="button"><i class="ph ph-sparkle" aria-hidden="true"></i><span>玩</span></button>
-      </nav>
-
-      <section class="answer-card" id="answerCard" aria-live="polite">
-        <button class="lead-place is-placeholder" id="heroCard" type="button">
-          <div class="place-visual placeholder-visual" id="heroVisual"><i class="ph ph-map-pin" aria-hidden="true"></i></div>
-          <div class="hero-gradient"></div>
-          <div class="hero-copy">
-            <div class="hero-badges"><span class="badge badge-brand" id="heroBadge">需要位置</span></div>
-            <h2 id="heroName">附近值得去的地方</h2>
-            <p id="heroReason">定位后直接给你一个答案</p>
-          </div>
-        </button>
-
-        <div class="reason-strip" id="reasonStrip">
-          <span class="reason-label">推荐理由</span>
-          <span class="reason-chip">先看位置</span>
-        </div>
-
-        <div class="alternatives-head">
-          <h3>备选</h3>
-          <button class="circle-button refresh-button" id="refreshButton" type="button" aria-label="再挑">
-            <i class="ph ph-arrows-clockwise" aria-hidden="true"></i>
-          </button>
-        </div>
-        <div class="alternative-list" id="alternativeList">
-          <div class="alternative-skeleton"></div><div class="alternative-skeleton"></div>
+      <section class="decision-head">
+        <h1>现在想做什么？</h1>
+        <nav class="mood-switch" aria-label="选择类型">
+          <button class="mood active" data-mood="food" type="button">吃</button>
+          <button class="mood" data-mood="drink" type="button">喝</button>
+          <button class="mood" data-mood="play" type="button">玩</button>
+        </nav>
+        <div class="occasion-switch" aria-label="选择场合">
+          <button class="occasion" data-occasion="business" type="button">商务</button>
+          <button class="occasion active" data-occasion="friends" type="button">朋友</button>
+          <button class="occasion" data-occasion="date" type="button">约会</button>
+          <button class="occasion" data-occasion="solo" type="button">自己</button>
         </div>
       </section>
 
-      <section class="location-callout" id="locationCallout">
-        <div><strong>先用你的位置安排</strong><p>只用来找附近地点，不会保存。</p></div>
-        <button class="primary-button compact" id="locateButton" type="button">允许定位</button>
+      <section class="state-panel" id="startPanel">
+        <div class="state-symbol"><span></span></div>
+        <h2>先看看你附近</h2>
+        <p>位置只用于这次推荐，不会保存精确地址。</p>
+        <button class="primary" id="startLocate" type="button">使用我的位置</button>
+      </section>
+
+      <section class="loading-panel hidden" id="loadingPanel" aria-live="polite">
+        <div class="loading-line wide"></div><div class="loading-line"></div><div class="loading-block"></div>
+        <p>正在挑附近合适的地方</p>
+      </section>
+
+      <section class="result hidden" id="resultPanel" aria-live="polite">
+        <article class="recommendation" id="recommendation">
+          <div class="result-topline"><span id="resultKicker">就去这家</span><span id="distanceText"></span></div>
+          <h2 id="placeName"></h2>
+          <p id="placeReason"></p>
+          <div class="place-visual" id="placeVisual"><span class="pin-shape"></span></div>
+          <div class="result-actions">
+            <a class="primary" id="navigateButton" href="#" target="_blank" rel="noopener">带我去</a>
+            <button class="secondary" id="saveButton" type="button">收藏</button>
+          </div>
+        </article>
+
+        <button class="shuffle" id="shuffleButton" type="button"><span>换一家</span><small id="remainingText"></small></button>
+
+        <div class="alternatives" id="alternatives"></div>
+      </section>
+
+      <section class="error-panel hidden" id="errorPanel" aria-live="polite">
+        <h2>先去地图里看看</h2>
+        <p id="errorText">附近地点暂时没有返回，位置已经拿到了。</p>
+        <div class="error-actions">
+          <button class="primary" id="retryButton" type="button">重新推荐</button>
+          <a class="secondary" id="mapSearchButton" href="#" target="_blank" rel="noopener">打开高德地图</a>
+        </div>
       </section>
     </main>
 
-    <dialog class="sheet" id="preferencesDialog">
-      <div class="sheet-grabber"></div>
-      <header class="sheet-nav"><span></span><strong>我的偏好</strong><button id="closePreferences" type="button">完成</button></header>
-      <div class="sheet-scroll preferences-content">
-        <section class="sheet-intro"><h2>越像你，越不用想</h2><p>选几个真的在意的就好，安排会少推荐那些“看起来可以但你不想去”的地方。</p></section>
-        <section><h3>这次是什么场合</h3><div class="choice-grid occasion-grid" id="occasionGrid"></div></section>
-        <section class="walking-box"><div class="section-title-row"><h3>步行范围</h3><strong id="walkingValue">20分钟内</strong></div><input id="walkingRange" type="range" min="8" max="30" value="20" step="1" /><div class="range-labels"><span>近一点</span><span id="distanceEstimate">约 1.6km</span><span>愿意多走</span></div></section>
-        <section><h3>吃</h3><div class="interest-grid" data-interest-group="food"></div></section>
-        <section><h3>喝</h3><div class="interest-grid" data-interest-group="drink"></div></section>
-        <section><h3>玩</h3><div class="interest-grid" data-interest-group="play"></div></section>
-        <section><h3>氛围</h3><div class="interest-grid" data-interest-group="vibe"></div></section>
-        <button class="secondary-button" id="clearPreferences" type="button">清空偏好</button>
-      </div>
-    </dialog>
-
-    <dialog class="sheet" id="favoritesDialog">
-      <div class="sheet-grabber"></div>
-      <header class="sheet-nav"><span></span><strong>下次再去</strong><button id="closeFavorites" type="button">完成</button></header>
-      <div class="sheet-scroll favorites-content" id="favoritesList"></div>
-    </dialog>
-
-    <dialog class="sheet detail-sheet" id="placeDialog">
-      <div class="sheet-grabber floating"></div>
-      <button class="circle-button sheet-close" id="closeDialog" type="button" aria-label="关闭"><i class="ph ph-x" aria-hidden="true"></i></button>
-      <div class="sheet-scroll detail-content" id="dialogContent"></div>
-      <div class="detail-actions" id="detailActions"></div>
+    <dialog class="detail" id="detailDialog">
+      <button class="detail-close" id="detailClose" type="button" aria-label="关闭">关闭</button>
+      <div id="detailContent"></div>
     </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/app.js"></script>
   </body>
 </html>

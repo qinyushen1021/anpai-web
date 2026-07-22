@@ -1,0 +1,22 @@
+{
+  "name": "anpai-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "start": "node server.mjs",
+    "build": "vite build",
+    "preview": "npm run build && wrangler dev",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "dependencies": {
+    "@phosphor-icons/web": "^2.1.2",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.46.0",
+    "vite": "^7.0.0",
+    "wrangler": "^4.113.0"
+  }
+}
