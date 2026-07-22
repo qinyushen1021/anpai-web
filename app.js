@@ -189,8 +189,8 @@ async function fetchPhotonDirect(lat, lon, mood, parentSignal) {
       return payload.features || [];
     } finally { timeout.done(); }
   };
-  const batches = await Promise.all(nearbyConfig[mood].photon.map(request));
-  return batches.flat().map((item) => {
+  const batches = await Promise.allSettled(nearbyConfig[mood].photon.map(request));
+  return batches.flatMap((batch) => batch.status === 'fulfilled' ? batch.value : []).map((item) => {
       const properties = item.properties || {};
       const category = `${properties.osm_key}:${properties.osm_value}`;
       if (!properties.name || !allowed.has(category)) return null;
@@ -208,7 +208,7 @@ async function fetchPhotonDirect(lat, lon, mood, parentSignal) {
 
 async function fetchDirectPlaces(signal) {
   const { lat, lon } = state.coords;
-  const loaders = [fetchOverpassDirect, fetchPhotonDirect, fetchNominatimDirect];
+  const loaders = [fetchPhotonDirect, fetchOverpassDirect, fetchNominatimDirect];
   for (const loader of loaders) {
     try {
       const elements = await loader(lat, lon, state.mood, signal);
