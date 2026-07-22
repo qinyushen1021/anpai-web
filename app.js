@@ -7,6 +7,17 @@ const moodCopy = {
   drink: { label: '喝', search: '附近咖啡酒吧' },
   play: { label: '玩', search: '附近展览公园电影' }
 };
+const nearbyConfig = {
+  food: { filters: ['["amenity"~"restaurant|fast_food|food_court"]'], query: 'restaurant', photon: ['restaurant', 'food', 'noodle', 'hotpot'] },
+  drink: { filters: ['["amenity"~"cafe|bar|pub|biergarten"]'], query: 'cafe', photon: ['cafe', 'coffee', 'bar', 'tea'] },
+  play: { filters: ['["tourism"~"museum|gallery|attraction"]', '["leisure"~"park|sports_centre|bowling_alley"]', '["amenity"~"cinema|theatre|arts_centre"]'], query: 'museum', photon: ['museum', 'cinema', 'gallery', 'theatre', 'park'] }
+};
+const overpassEndpoints = [
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+  'https://overpass.nchc.org.tw/api/interpreter'
+];
 const occasionReasons = {
   business: { food: '稳妥安静，方便聊事', drink: '环境安静，适合会谈', play: '有内容，适合接待' },
   friends: { food: '适合朋友一起吃', drink: '能聊天，也能续摊', play: '一起去更有意思' },
@@ -21,6 +32,7 @@ const state = {
   places: [],
   index: 0,
   request: null,
+  locating: false,
   favorites: JSON.parse(localStorage.getItem('anpai-favorites-v3') || '[]')
 };
 let toastTimer;
@@ -50,7 +62,7 @@ function cacheKey(mood = state.mood) {
 function readCachedPlaces() {
   try {
     const cached = JSON.parse(localStorage.getItem(`anpai-result:${cacheKey()}`));
-    return cached && Date.now() - cached.savedAt < 6 * 60 * 60 * 1000 ? cached.places : [];
+    return cached && Date.now() - cached.savedAt < 7 * 24 * 60 * 60 * 1000 ? cached.places : [];
   } catch { return []; }
 }
 
@@ -72,25 +84,174 @@ function updateMapSearch() {
   $('#mapSearchButton').href = `https://uri.amap.com/search?keyword=${query}&center=${state.coords.lon},${state.coords.lat}`;
 }
 
+function distanceMeters(a, b) {
+  const rad = (number) => number * Math.PI / 180;
+  const dLat = rad(b.lat - a.lat);
+  const dLon = rad(b.lon - a.lon);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function timedSignal(ms, parentSignal) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const timer = setTimeout(abort, ms);
+  parentSignal?.addEventListener('abort', abort, { once: true });
+  return {
+    signal: controller.signal,
+    done: () => {
+      clearTimeout(timer);
+      parentSignal?.removeEventListener('abort', abort);
+    }
+  };
+}
+
+function normalizePlaces(elements, origin, mood) {
+  const names = new Set();
+  return elements.map((item) => {
+    const lat = Number(item.lat ?? item.center?.lat);
+    const lon = Number(item.lon ?? item.center?.lon);
+    const tags = item.tags || {};
+    const name = tags.name?.trim();
+    if (!name || !Number.isFinite(lat) || !Number.isFinite(lon) || names.has(name)) return null;
+    names.add(name);
+    const type = tags.amenity || tags.tourism || tags.leisure || mood;
+    const feature = ({ restaurant: '餐厅', fast_food: '简餐', food_court: '美食', cafe: '咖啡', bar: '酒吧', pub: '小酌', biergarten: '小酌', museum: '展馆', gallery: '看展', attraction: '景点', park: '公园', cinema: '电影', theatre: '剧场', arts_centre: '艺术', sports_centre: '运动', bowling_alley: '保龄球' })[type] || moodCopy[mood].label;
+    const image = tags.image?.startsWith('https://') ? tags.image : '';
+    const address = tags.address || [tags['addr:district'], tags['addr:street'], tags['addr:housenumber']].filter(Boolean).join(' ');
+    const distance = Math.round(distanceMeters(origin, { lat, lon }));
+    if (distance > 15000) return null;
+    return { id: `${item.type || 'place'}-${item.id}`, name, lat, lon, distance, feature, image, address };
+  }).filter(Boolean).sort((a, b) => a.distance - b.distance).slice(0, 24);
+}
+
+async function fetchOverpassDirect(lat, lon, mood, parentSignal) {
+  const radius = 2600;
+  const clauses = nearbyConfig[mood].filters.map((filter) => `nwr(around:${radius},${lat},${lon})${filter};`).join('');
+  const query = `[out:json][timeout:10];(${clauses});out center tags 80;`;
+  const request = async (endpoint) => {
+    const timeout = timedSignal(8500, parentSignal);
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+        body: new URLSearchParams({ data: query }),
+        signal: timeout.signal
+      });
+      if (!response.ok) throw new Error(`Overpass ${response.status}`);
+      const payload = await response.json();
+      if (!payload.elements?.length) throw new Error('No Overpass places');
+      return payload.elements;
+    } finally { timeout.done(); }
+  };
+  try { return await Promise.any(overpassEndpoints.slice(0, 2).map(request)); }
+  catch { return Promise.any(overpassEndpoints.slice(2).map(request)); }
+}
+
+async function fetchNominatimDirect(lat, lon, mood, parentSignal) {
+  const delta = .035;
+  const params = new URLSearchParams({
+    format: 'jsonv2',
+    q: nearbyConfig[mood].query,
+    viewbox: `${lon - delta},${lat + delta},${lon + delta},${lat - delta}`,
+    bounded: '1',
+    limit: '30',
+    addressdetails: '1',
+    extratags: '1',
+    'accept-language': 'zh-CN,zh,en'
+  });
+  const timeout = timedSignal(8500, parentSignal);
+  try {
+    const response = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, { signal: timeout.signal });
+    if (!response.ok) throw new Error(`Nominatim ${response.status}`);
+    const results = await response.json();
+    if (!results.length) throw new Error('No Nominatim places');
+    return results.map((item) => ({
+      type: 'nominatim', id: item.place_id, lat: Number(item.lat), lon: Number(item.lon),
+      tags: { ...(item.extratags || {}), name: item.display_name?.split(',')[0], amenity: item.type, address: item.display_name }
+    }));
+  } finally { timeout.done(); }
+}
+
+async function fetchPhotonDirect(lat, lon, mood, parentSignal) {
+  const allowed = {
+    food: new Set(['amenity:restaurant', 'amenity:fast_food', 'amenity:food_court']),
+    drink: new Set(['amenity:cafe', 'amenity:bar', 'amenity:pub', 'amenity:biergarten']),
+    play: new Set(['tourism:museum', 'tourism:gallery', 'tourism:attraction', 'leisure:park', 'leisure:sports_centre', 'leisure:bowling_alley', 'amenity:cinema', 'amenity:theatre', 'amenity:arts_centre'])
+  }[mood];
+  const request = async (query) => {
+    const params = new URLSearchParams({ q: query, lat, lon, limit: '20' });
+    const timeout = timedSignal(7000, parentSignal);
+    try {
+      const response = await fetch(`https://photon.komoot.io/api/?${params}`, { signal: timeout.signal });
+      if (!response.ok) throw new Error(`Photon ${response.status}`);
+      const payload = await response.json();
+      return payload.features || [];
+    } finally { timeout.done(); }
+  };
+  const batches = await Promise.all(nearbyConfig[mood].photon.map(request));
+  return batches.flat().map((item) => {
+      const properties = item.properties || {};
+      const category = `${properties.osm_key}:${properties.osm_value}`;
+      if (!properties.name || !allowed.has(category)) return null;
+      return {
+        type: 'photon', id: properties.osm_id || `${item.geometry?.coordinates?.[0]}-${item.geometry?.coordinates?.[1]}`,
+        lat: Number(item.geometry?.coordinates?.[1]), lon: Number(item.geometry?.coordinates?.[0]),
+        tags: {
+          name: properties.name,
+          [properties.osm_key || 'amenity']: properties.osm_value,
+          address: [properties.district, properties.street, properties.housenumber, properties.city].filter(Boolean).join(' ')
+        }
+      };
+    }).filter(Boolean);
+}
+
+async function fetchDirectPlaces(signal) {
+  const { lat, lon } = state.coords;
+  const loaders = [fetchOverpassDirect, fetchPhotonDirect, fetchNominatimDirect];
+  for (const loader of loaders) {
+    try {
+      const elements = await loader(lat, lon, state.mood, signal);
+      const places = normalizePlaces(elements, { lat, lon }, state.mood);
+      if (places.length) return places;
+    } catch (error) {
+      if (error.name === 'AbortError' && signal.aborted) throw error;
+    }
+  }
+  throw new Error('No nearby places');
+}
+
+async function fetchNearbyPlaces(signal) {
+  const isStatic = location.hostname.endsWith('.github.io') || location.protocol === 'file:';
+  if (!isStatic) {
+    try {
+      const params = new URLSearchParams({ lat: state.coords.lat, lon: state.coords.lon, mood: state.mood });
+      const response = await fetch(`/api/nearby?${params}`, { signal });
+      if (!response.ok) throw new Error('Nearby server unavailable');
+      const data = await response.json();
+      if (!data.places?.length) throw new Error('No server places');
+      return data.places;
+    } catch (error) {
+      if (error.name === 'AbortError') throw error;
+    }
+  }
+  return fetchDirectPlaces(signal);
+}
+
 async function loadPlaces({ force = false } = {}) {
   if (!state.coords) return locate();
   const cached = readCachedPlaces();
-  if (!force && cached.length) {
+  if (cached.length && (!force || !state.places.length)) {
     state.places = cached;
     state.index = 0;
     renderResult();
-  } else setPanel('loading');
+  } else if (!state.places.length) setPanel('loading');
 
   state.request?.abort();
   const controller = new AbortController();
   state.request = controller;
   try {
-    const params = new URLSearchParams({ lat: state.coords.lat, lon: state.coords.lon, mood: state.mood });
-    const response = await fetch(`/api/nearby?${params}`, { signal: controller.signal });
-    if (!response.ok) throw new Error('nearby unavailable');
-    const data = await response.json();
-    if (!data.places?.length) throw new Error('no nearby places');
-    state.places = data.places;
+    state.places = await fetchNearbyPlaces(controller.signal);
     state.index = 0;
     writeCachedPlaces(state.places);
     renderResult();
@@ -109,21 +270,37 @@ async function loadPlaces({ force = false } = {}) {
 }
 
 function locate() {
+  if (state.locating) return;
   if (!navigator.geolocation) {
     $('#errorText').textContent = '当前浏览器不支持定位，请直接在地图查看附近地点。';
     setPanel('error');
     return;
   }
+  state.locating = true;
   $('#locationText').textContent = '正在定位';
-  setPanel('loading');
+  const cached = state.coords ? readCachedPlaces() : [];
+  if (cached.length) {
+    state.places = cached;
+    state.index = 0;
+    renderResult();
+  } else if (!state.places.length) setPanel('loading');
   navigator.geolocation.getCurrentPosition(({ coords }) => {
+    state.locating = false;
     setLocation(coords);
     loadPlaces();
   }, () => {
+    state.locating = false;
+    if (state.coords) {
+      $('#locationText').textContent = '上次位置';
+      if (state.places.length) renderResult();
+      else loadPlaces();
+      toast('定位未更新，继续使用上次位置');
+      return;
+    }
     $('#locationText').textContent = '需要位置';
     $('#errorText').textContent = '没有拿到定位权限。请允许位置访问，或者在浏览器设置里重新开启。';
     setPanel('error');
-  }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 10 * 60 * 1000 });
+  }, { enableHighAccuracy: false, timeout: 8000, maximumAge: 30 * 60 * 1000 });
 }
 
 function currentPlace() { return state.places[state.index % state.places.length]; }
