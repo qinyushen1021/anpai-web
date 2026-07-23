@@ -893,7 +893,12 @@ function start() {
     fetchPlaces();
     return;
   }
-  const saved = readJSON(STORAGE.location, null);
+  const saved = [
+    readJSON(STORAGE.location, null),
+    readJSON('anpai-location-v4', null),
+    readJSON('anpai-location-v3', null),
+    readJSON('anpai-last-location', null)
+  ].find((item) => item && Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lon)));
   if (saved && Date.now() - saved.savedAt < LOCATION_TTL) {
     setLocation(saved, '上次的位置');
     fetchPlaces();
