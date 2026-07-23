@@ -5,15 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#f5f5f3" />
     <meta name="description" content="安排：吃、喝、玩，直接给你一个附近去处。" />
-    <link rel="icon" href="./app-icon.png?v=full2" />
-    <link rel="stylesheet" href="./style.css?v=full2" />
+    <link rel="icon" href="./app-icon.png?v=filters3" />
+    <link rel="stylesheet" href="./style.css?v=filters3" />
     <title>安排</title>
   </head>
   <body>
     <main class="app" id="app">
       <header class="topbar">
         <div class="brand">
-          <img src="./app-icon.png?v=full2" alt="" />
+          <img src="./app-icon.png?v=filters3" alt="" />
           <div><strong>安排</strong><span>不用再说随便</span></div>
         </div>
         <div class="top-actions">
@@ -44,6 +44,10 @@
           <button class="occasion" data-occasion="date" type="button"><strong>约会</strong><small>氛围舒服</small></button>
           <button class="occasion" data-occasion="solo" type="button"><strong>自己</strong><small>轻松自在</small></button>
         </div>
+        <button class="filter-summary" id="filterSummary" type="button" aria-label="查看当前筛选">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6" /></svg>
+          <span id="filterSummaryText">3km内</span><small>修改</small>
+        </button>
       </section>
 
       <section class="state-panel" id="startPanel">
@@ -74,7 +78,7 @@
           <h2 id="placeName"></h2>
           <div class="reason-chips" id="reasonChips"></div>
           <p id="placeReason"></p>
-          <button class="place-visual" id="placeVisual" type="button" aria-label="查看地点详情"><span class="pin-shape"></span></button>
+          <div class="place-visual" id="placeVisual" role="button" tabindex="0" aria-label="查看地点详情"><span class="pin-shape"></span></div>
           <div class="place-facts" id="placeFacts"></div>
           <div class="result-actions">
             <a class="primary" id="navigateButton" href="#" target="_blank" rel="noopener">开始导航</a>
@@ -91,7 +95,7 @@
       </section>
 
       <section class="error-panel hidden" id="errorPanel" aria-live="polite">
-        <h2>这次没拿到附近地点</h2>
+        <h2 id="errorTitle">这次没拿到附近地点</h2>
         <p id="errorText">位置已经拿到，地点服务暂时没有返回。</p>
         <div class="error-actions">
           <button class="primary" id="retryButton" type="button">重新推荐</button>
@@ -106,14 +110,16 @@
     </dialog>
 
     <dialog class="sheet" id="preferencesDialog">
-      <div class="sheet-header"><strong>我的偏好</strong><button class="sheet-close" data-close="preferencesDialog" type="button" aria-label="关闭">完成</button></div>
+      <div class="sheet-header"><strong>筛选</strong><button class="sheet-close" data-close="preferencesDialog" type="button" aria-label="关闭">完成</button></div>
       <div class="sheet-body preferences-body">
+        <p class="filter-help">选中的距离和偏好会严格限制推荐结果。</p>
         <section class="preference-section">
-          <div class="section-title"><h2>想走多远</h2><span id="rangeHint"></span></div>
+          <div class="section-title"><h2>距离</h2><span id="rangeHint"></span></div>
           <div class="range-switch" id="rangeSwitch">
-            <button data-range="near" type="button"><strong>10分钟内</strong><small>先看最近</small></button>
-            <button data-range="comfortable" type="button"><strong>20分钟内</strong><small>多几个好选择</small></button>
-            <button data-range="explore" type="button"><strong>好店可走</strong><small>值得就去</small></button>
+            <button data-range="km1" type="button"><strong>1km内</strong><small>最近</small></button>
+            <button data-range="km3" type="button"><strong>3km内</strong><small>附近</small></button>
+            <button data-range="km5" type="button"><strong>5km内</strong><small>多找些</small></button>
+            <button data-range="more" type="button"><strong>更多</strong><small>15km内</small></button>
           </div>
         </section>
         <section class="preference-section"><h2>吃</h2><div class="interest-grid" data-interest-group="food"></div></section>
@@ -130,6 +136,6 @@
     </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script type="module" src="./app.js?v=full2"></script>
+    <script type="module" src="./app.js?v=filters3"></script>
   </body>
 </html>
