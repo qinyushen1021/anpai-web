@@ -4,7 +4,7 @@ const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (char) => (
 const uniq = (items) => [...new Set(items.filter(Boolean))];
 
 const STORAGE = {
-  mood: 'anpai-mood-v4', occasion: 'anpai-occasion-v4', range: 'anpai-range-v4',
+  mood: 'anpai-mood-v4', occasion: 'anpai-occasion-v4', range: 'anpai-range-v5',
   interests: 'anpai-interests-v4', favorites: 'anpai-favorites-v4', location: 'anpai-location-v4'
 };
 
@@ -71,6 +71,15 @@ const interests = {
   ]
 };
 const interestLookup = new Map(Object.values(interests).flat().map(([id, label, keywords]) => [id, { id, label, keywords }]));
+const interestSearchQueries = {
+  sichuan: ['sichuan restaurant'], hotpot: ['hotpot'], bbq: ['barbecue'], noodles: ['noodle restaurant'],
+  japanese: ['japanese restaurant','sushi'], korean: ['korean restaurant'], western: ['western restaurant','bistro'],
+  cantonese: ['cantonese restaurant','dim sum'], southeastAsian: ['thai restaurant','vietnamese restaurant'], dimsum: ['dim sum'],
+  snack: ['fast food'], vegetarian: ['vegetarian restaurant'], coffee: ['cafe','coffee'], tea: ['tea house'],
+  dessert: ['dessert','bakery'], bar: ['bar','pub'], movie: ['cinema'], exhibition: ['museum','gallery'],
+  bookstore: ['bookstore'], park: ['park'], shopping: ['shopping mall'], game: ['game centre'], sports: ['sports centre','bowling'],
+  market: ['market'], live: ['theatre','music venue'], spa: ['spa'], ktv: ['karaoke']
+};
 
 const overpassFilters = {
   food: ['["amenity"~"restaurant|fast_food|food_court"]'],
@@ -81,20 +90,24 @@ const overpassEndpoints = [
   'https://overpass.kumi.systems/api/interpreter', 'https://overpass-api.de/api/interpreter',
   'https://overpass.private.coffee/api/interpreter', 'https://overpass.nchc.org.tw/api/interpreter'
 ];
-const rangeMeters = { near: 780, comfortable: 1560, explore: 2340 };
+const rangeMeters = { km1: 1000, km3: 3000, km5: 5000, more: 15000 };
+const rangeLabels = { km1: '1km内', km3: '3km内', km5: '5km内', more: '15km内' };
 
 function readJSON(key, fallback) {
   try { const value = JSON.parse(localStorage.getItem(key)); return value ?? fallback; } catch { return fallback; }
 }
 
 const legacyFavorites = readJSON('anpai-favorites-v3', []);
+const storedRange = localStorage.getItem(STORAGE.range) || localStorage.getItem('anpai-range-v4');
+const migratedRange = ({ near: 'km1', comfortable: 'km3', explore: 'km5' })[storedRange] || storedRange;
 const state = {
   mood: localStorage.getItem(STORAGE.mood) || localStorage.getItem('anpai-mood-v3') || 'food',
   occasion: localStorage.getItem(STORAGE.occasion) || localStorage.getItem('anpai-occasion-v3') || 'friends',
-  range: localStorage.getItem(STORAGE.range) || 'comfortable',
+  range: rangeMeters[migratedRange] ? migratedRange : 'km3',
   selectedInterests: new Set(readJSON(STORAGE.interests, [])),
   coords: null, rawPlaces: [], places: [], index: 0, request: null, locating: false,
-  favorites: readJSON(STORAGE.favorites, legacyFavorites), activeDetail: null, preferencesDirty: false
+  favorites: readJSON(STORAGE.favorites, legacyFavorites), activeDetail: null, preferencesDirty: false,
+  metadataLoading: false, errorAction: 'retry'
 };
 let toastTimer;
 
@@ -130,6 +143,27 @@ function relevantInterestIds() {
   return [...state.selectedInterests].filter((id) => moodIds.has(id)).sort();
 }
 
+function selectedMoodInterestIds() {
+  const group = state.mood === 'food' ? 'food' : state.mood === 'drink' ? 'drink' : 'play';
+  const ids = new Set(interests[group].map(([id]) => id));
+  return [...state.selectedInterests].filter((id) => ids.has(id));
+}
+
+function selectedVibeInterestIds() {
+  const ids = new Set(interests.vibe.map(([id]) => id));
+  return [...state.selectedInterests].filter((id) => ids.has(id));
+}
+
+function filterSummaryText() {
+  const labels = relevantInterestIds().map((id) => interestLookup.get(id)?.label).filter(Boolean);
+  return [rangeLabels[state.range], ...labels].join(' · ');
+}
+
+function renderFilterSummary() {
+  $('#filterSummaryText').textContent = filterSummaryText();
+  $('#filterSummary').classList.toggle('has-preferences', relevantInterestIds().length > 0);
+}
+
 function cacheKey() {
   if (!state.coords) return '';
   return `${state.mood}:${state.occasion}:${state.coords.lat.toFixed(2)}:${state.coords.lon.toFixed(2)}:${relevantInterestIds().join('-')}`;
@@ -137,13 +171,13 @@ function cacheKey() {
 
 function readCachedPlaces() {
   try {
-    const cached = JSON.parse(localStorage.getItem(`anpai-result-v4:${cacheKey()}`));
+    const cached = JSON.parse(localStorage.getItem(`anpai-result-v5:${cacheKey()}`));
     return cached && Date.now() - cached.savedAt < 7 * 24 * 60 * 60 * 1000 ? cached.places : [];
   } catch { return []; }
 }
 
 function writeCachedPlaces(places) {
-  try { localStorage.setItem(`anpai-result-v4:${cacheKey()}`, JSON.stringify({ savedAt: Date.now(), places })); } catch { /* storage can be unavailable */ }
+  try { localStorage.setItem(`anpai-result-v5:${cacheKey()}`, JSON.stringify({ savedAt: Date.now(), places })); } catch { /* storage can be unavailable */ }
 }
 
 function updateFavoriteCount() {
@@ -187,6 +221,11 @@ function imageURL(tags) {
     return `https://commons.wikimedia.org/wiki/Special:Redirect/file/${encodeURIComponent(commons.replace(/^(File|文件):/i, ''))}`;
   }
   return '';
+}
+
+function normalizedOsmType(value = '') {
+  const type = String(value).toLowerCase();
+  return ({ n: 'node', w: 'way', r: 'relation' })[type] || (['node','way','relation'].includes(type) ? type : '');
 }
 
 function categoryFromTags(tags, fallbackMood) {
@@ -243,7 +282,9 @@ function normalizePlaces(elements, origin, mood) {
       id: `${item.type || 'place'}-${item.id || `${lat}-${lon}`}`, name, lat, lon, distance, category,
       feature: featureFromTags(tags, category), image: imageURL(tags), address, phone, website,
       openingHours: tags.opening_hours || '', cuisine: tags.cuisine || '', rating: ratingValue > 0 && ratingValue <= 5 ? ratingValue : null,
-      averageCost: averageCost ? Number(averageCost) : null, evidence, source: item.type === 'photon' ? 'OpenStreetMap' : 'OpenStreetMap'
+      averageCost: averageCost ? Number(averageCost) : null, evidence, source: 'OpenStreetMap',
+      osmId: String(item.osmId || item.id || ''), osmType: normalizedOsmType(item.osmType || item.type),
+      wikidata: tags.wikidata || '', wikipedia: tags.wikipedia || '', metadataLoaded: item.type !== 'photon'
     };
   }).filter(Boolean);
 }
@@ -268,10 +309,9 @@ async function fetchOverpassDirect(lat, lon, mood, parentSignal) {
 function photonQueries() {
   const queries = [...currentScenario().searches];
   relevantInterestIds().slice(0, 2).forEach((id) => {
-    const interest = interestLookup.get(id);
-    if (interest) queries.unshift(interest.label);
+    queries.unshift(...(interestSearchQueries[id] || []));
   });
-  return uniq(queries).slice(0, 5);
+  return uniq(queries).slice(0, 6);
 }
 
 async function fetchPhotonDirect(lat, lon, mood, parentSignal) {
@@ -290,6 +330,7 @@ async function fetchPhotonDirect(lat, lon, mood, parentSignal) {
     if (!p.name || !p.osm_key || !p.osm_value) return null;
     return {
       type: 'photon', id: p.osm_id || `${item.geometry?.coordinates?.[0]}-${item.geometry?.coordinates?.[1]}`,
+      osmId: p.osm_id, osmType: p.osm_type,
       lat: Number(item.geometry?.coordinates?.[1]), lon: Number(item.geometry?.coordinates?.[0]),
       tags: { name: p.name, [p.osm_key]: p.osm_value, address: [p.district, p.street, p.housenumber, p.city].filter(Boolean).join(' '), website: p.website, phone: p.phone }
     };
@@ -306,12 +347,91 @@ async function fetchNominatimDirect(lat, lon, mood, parentSignal) {
     if (!response.ok) throw new Error(`Nominatim ${response.status}`);
     const results = await response.json();
     if (!results.length) throw new Error('No Nominatim places');
-    return results.map((item) => ({ type: 'nominatim', id: item.place_id, lat: Number(item.lat), lon: Number(item.lon), tags: { ...(item.extratags || {}), name: item.display_name?.split(',')[0], [item.class || 'amenity']: item.type, address: item.display_name } }));
+    return results.map((item) => ({ type: 'nominatim', id: item.osm_id || item.place_id, osmId: item.osm_id, osmType: item.osm_type, lat: Number(item.lat), lon: Number(item.lon), tags: { ...(item.extratags || {}), name: item.display_name?.split(',')[0], [item.class || 'amenity']: item.type, address: item.display_name } }));
   } finally { timeout.done(); }
+}
+
+function enrichPlaceFromTags(place, tags = {}) {
+  const category = categoryFromTags(tags, state.mood);
+  const address = tags.address || [tags['addr:city'], tags['addr:district'], tags['addr:street'], tags['addr:housenumber']].filter(Boolean).join(' ');
+  const ratingValue = Number(tags.rating || tags.stars);
+  const averageCost = String(tags.average_cost || tags['average_cost:person'] || '').replace(/[^0-9.]/g, '');
+  const evidence = uniq([
+    ...(place.evidence || []), ...String(tags.cuisine || '').split(/[;,]/).map((part) => part.trim()),
+    tags.brand, tags.outdoor_seating === 'yes' ? '露台' : '', tags.wheelchair === 'yes' ? '无障碍' : '',
+    tags.internet_access === 'wlan' ? '有 Wi-Fi' : ''
+  ]).slice(0, 6);
+  return {
+    ...place, category, feature: featureFromTags(tags, category), image: imageURL(tags) || place.image,
+    address: address || place.address, phone: tags.phone || tags['contact:phone'] || place.phone,
+    website: safeURL(tags.website || tags['contact:website']) || place.website,
+    openingHours: tags.opening_hours || place.openingHours, cuisine: tags.cuisine || place.cuisine,
+    rating: ratingValue > 0 && ratingValue <= 5 ? ratingValue : place.rating,
+    averageCost: averageCost ? Number(averageCost) : place.averageCost, evidence,
+    wikidata: tags.wikidata || place.wikidata, wikipedia: tags.wikipedia || place.wikipedia, metadataLoaded: true
+  };
+}
+
+async function fetchOsmMetadata(places, signal) {
+  const targets = places.filter((place) => !place.metadataLoaded && place.osmId && place.osmType);
+  if (!targets.length) return places;
+  const details = new Map();
+  const groups = ['node','way','relation'].map((type) => [type, uniq(targets.filter((place) => place.osmType === type).map((place) => place.osmId)).slice(0, 80)]).filter(([, ids]) => ids.length);
+  await Promise.allSettled(groups.map(async ([type, ids]) => {
+    const plural = `${type}s`;
+    const response = await fetch(`https://api.openstreetmap.org/api/0.6/${plural}.json?${plural}=${ids.join(',')}`, { signal });
+    if (!response.ok) throw new Error(`OSM metadata ${response.status}`);
+    const payload = await response.json();
+    (payload.elements || []).forEach((element) => details.set(`${type}:${element.id}`, element.tags || {}));
+  }));
+  return places.map((place) => {
+    const tags = details.get(`${place.osmType}:${place.osmId}`);
+    return tags ? enrichPlaceFromTags(place, tags) : { ...place, metadataLoaded: true };
+  });
+}
+
+async function fetchWikidataImage(qid, signal) {
+  if (!/^Q\d+$/.test(qid || '')) return '';
+  const response = await fetch(`https://www.wikidata.org/wiki/Special:EntityData/${qid}.json`, { signal });
+  if (!response.ok) return '';
+  const entity = (await response.json()).entities?.[qid];
+  const filename = entity?.claims?.P18?.[0]?.mainsnak?.datavalue?.value;
+  return filename ? `https://commons.wikimedia.org/wiki/Special:Redirect/file/${encodeURIComponent(filename)}?width=1200` : '';
+}
+
+async function fetchWikipediaImage(reference, signal) {
+  const match = String(reference || '').match(/^([a-z-]+):(.+)$/i);
+  if (!match) return '';
+  const response = await fetch(`https://${match[1]}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(match[2])}`, { signal });
+  if (!response.ok) return '';
+  const payload = await response.json();
+  return safeURL(payload.thumbnail?.source || payload.originalimage?.source);
+}
+
+async function enrichVerifiedImages(places, signal) {
+  const candidates = places.filter((place) => !place.image && (place.wikidata || place.wikipedia)).slice(0, 10);
+  const images = new Map();
+  await Promise.allSettled(candidates.map(async (place) => {
+    const image = await fetchWikidataImage(place.wikidata, signal).catch(() => '') || await fetchWikipediaImage(place.wikipedia, signal).catch(() => '');
+    if (image) images.set(place.id, image);
+  }));
+  return places.map((place) => images.has(place.id) ? { ...place, image: images.get(place.id), imageSource: 'Wikimedia Commons' } : place);
+}
+
+async function enrichPlaces(places, signal) {
+  const withMetadata = await fetchOsmMetadata(places, signal);
+  return enrichVerifiedImages(withMetadata, signal);
 }
 
 async function fetchDirectPlaces(signal) {
   const { lat, lon } = state.coords;
+  if (relevantInterestIds().length) {
+    try {
+      const elements = await fetchPhotonDirect(lat, lon, state.mood, signal);
+      const filteredSearchPlaces = normalizePlaces(elements, { lat, lon }, state.mood);
+      if (filteredSearchPlaces.length) return filteredSearchPlaces;
+    } catch (error) { if (error.name === 'AbortError') throw error; }
+  }
   const firstWave = [fetchPhotonDirect, fetchOverpassDirect].map(async (loader) => {
     const elements = await loader(lat, lon, state.mood, signal);
     const places = normalizePlaces(elements, { lat, lon }, state.mood);
@@ -355,16 +475,51 @@ function stableOccasionBias(place, occasion) {
   return Math.abs(hash % 18);
 }
 
+function matchesInterest(place, id) {
+  const text = placeText(place);
+  const direct = matchesAny(text, interestLookup.get(id)?.keywords || []).length > 0;
+  if (direct) return true;
+  switch (id) {
+    case 'quiet': return ['cafe','culture','park'].includes(place.category) && !matchesAny(text, ['夜店','酒吧','ktv','电玩城']).length;
+    case 'photogenic': return Boolean(place.image) || ['culture','park'].includes(place.category);
+    case 'budget': return (place.averageCost && place.averageCost <= 100) || matchesAny(text, ['简餐','快餐','小吃','面馆','公园']).length > 0;
+    case 'indoor': return !['park'].includes(place.category);
+    case 'walking': return ['park','culture','shop'].includes(place.category);
+    case 'fresh': return ['culture'].includes(place.category);
+    case 'lively': return ['night','activity','shop'].includes(place.category);
+    case 'chat': return ['cafe','night','park'].includes(place.category);
+    case 'rainy': return !['park'].includes(place.category);
+    default: return false;
+  }
+}
+
+function filterEmptyMessage() {
+  const labels = relevantInterestIds().map((id) => interestLookup.get(id)?.label).filter(Boolean);
+  const preference = labels.length ? `并符合“${labels.join('、')}”` : '';
+  return `${rangeLabels[state.range]}${preference}的地点暂时没有找到。可以放宽距离或减少偏好。`;
+}
+
 function rankPlaces(rawPlaces = state.rawPlaces) {
   const scenario = currentScenario(); const limit = rangeMeters[state.range];
-  let ranked = rawPlaces.map((place) => {
+  const moodFilters = selectedMoodInterestIds();
+  const vibeFilters = selectedVibeInterestIds();
+  const candidates = rawPlaces.filter((place) => {
+    if (place.distance > limit) return false;
+    if (moodFilters.length && !moodFilters.some((id) => matchesInterest(place, id))) return false;
+    if (vibeFilters.length && !vibeFilters.some((id) => matchesInterest(place, id))) return false;
+    return true;
+  });
+  document.documentElement.dataset.rawPlaces = String(rawPlaces.length);
+  document.documentElement.dataset.filteredPlaces = String(candidates.length);
+  document.documentElement.dataset.distanceLimit = String(limit);
+  const ranked = candidates.map((place) => {
     const text = placeText(place);
     const positives = matchesAny(text, scenario.positive); const negatives = matchesAny(text, scenario.negative);
-    const matchedInterests = relevantInterestIds().filter((id) => matchesAny(text, interestLookup.get(id)?.keywords || []).length);
+    const matchedInterests = relevantInterestIds().filter((id) => matchesInterest(place, id));
     let score = 100 - Math.min(55, place.distance / 115) + (scenario.weights[place.category] || 0) * 3;
     score += Math.min(30, positives.length * 12) - Math.min(90, negatives.length * 42) + matchedInterests.length * 26;
     score += stableOccasionBias(place, state.occasion);
-    if (place.distance <= limit) score += 18; else score -= Math.min(36, (place.distance - limit) / 120);
+    score += 18;
     if (place.rating) score += place.rating * 2; if (place.image) score += 3; if (place.evidence?.length) score += 2;
     if (state.mood === 'food' && place.category === 'sweet' && !state.selectedInterests.has('dessert') && state.occasion !== 'date') score -= 80;
     if (state.mood === 'play' && state.occasion === 'business' && ['shop','night','activity'].includes(place.category)) score -= 90;
@@ -372,8 +527,6 @@ function rankPlaces(rawPlaces = state.rawPlaces) {
     if (state.occasion === 'solo' && state.mood === 'food' && place.averageCost && place.averageCost > 160) score -= 15;
     return { ...place, score, positives, matchedInterests };
   }).sort((a, b) => b.score - a.score || a.distance - b.distance);
-  const inRange = ranked.filter((place) => place.distance <= limit);
-  if (inRange.length >= 3) ranked = [...inRange, ...ranked.filter((place) => place.distance > limit)];
   state.places = ranked.slice(0, 30); state.index = Math.min(state.index, Math.max(0, state.places.length - 1));
 }
 
@@ -394,14 +547,35 @@ function reasonChips(place) {
 function reasonFor(place) { return place.savedReason || reasonChips(place).slice(0, 2).join(' · '); }
 function mapUrl(place) { return `https://uri.amap.com/navigation?to=${place.lon},${place.lat},${encodeURIComponent(place.name)}&mode=walk`; }
 function appleMapsUrl(place) { return `https://maps.apple.com/?daddr=${place.lat},${place.lon}&q=${encodeURIComponent(place.name)}&dirflg=w`; }
-function reviewUrl(place) { return `https://www.baidu.com/s?wd=${encodeURIComponent(`${place.name} ${place.address || ''} 大众点评`)}`; }
+function mapEmbedUrl(place) {
+  const lonSpan = .006; const latSpan = .004;
+  const bbox = `${place.lon - lonSpan},${place.lat - latSpan},${place.lon + lonSpan},${place.lat + latSpan}`;
+  return `https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(bbox)}&layer=mapnik&marker=${place.lat}%2C${place.lon}`;
+}
+function dianpingAppUrl(place) { return `dianping://searchshoplist?keyword=${encodeURIComponent(place.name)}`; }
+function dianpingWebUrl(place) {
+  if ((place.address || '').includes('上海')) return `https://www.dianping.com/search/keyword/1/0_${encodeURIComponent(place.name)}`;
+  return 'https://www.dianping.com/';
+}
+function openDianping(place) {
+  const fallback = dianpingWebUrl(place);
+  let leftPage = false;
+  const onVisibility = () => { if (document.hidden) leftPage = true; };
+  document.addEventListener('visibilitychange', onVisibility, { once: true });
+  window.location.href = dianpingAppUrl(place);
+  setTimeout(() => {
+    document.removeEventListener('visibilitychange', onVisibility);
+    if (!leftPage) window.location.href = fallback;
+  }, 1200);
+}
 function isFavorite(place) { return state.favorites.some((item) => item.id === place.id); }
 
 function renderVisual(place, target = $('#placeVisual')) {
   if (place.image) {
-    target.innerHTML = `<img src="${escapeHtml(place.image)}" alt="${escapeHtml(place.name)}的门店实景" referrerpolicy="no-referrer" /><span class="visual-note">真实地点图片</span>`;
+    target.innerHTML = `<img src="${escapeHtml(place.image)}" alt="${escapeHtml(place.name)}的真实地点图片" referrerpolicy="no-referrer" /><span class="visual-note">真实地点图片</span>`;
+    target.querySelector('img')?.addEventListener('error', () => { place.image = ''; renderVisual(place, target); }, { once: true });
   } else {
-    target.innerHTML = '<span class="visual-empty"><span class="pin-shape"></span><span>暂无可验证的门店实景</span></span>';
+    target.innerHTML = `<iframe title="${escapeHtml(place.name)}位置地图" loading="lazy" src="${escapeHtml(mapEmbedUrl(place))}"></iframe><span class="visual-note">位置地图</span>`;
   }
 }
 
@@ -412,9 +586,21 @@ function factChips(place) {
   ]).filter(Boolean);
 }
 
+function showError(title, message, action = 'retry') {
+  state.errorAction = action;
+  $('#errorTitle').textContent = title;
+  $('#errorText').textContent = message;
+  $('#retryButton').textContent = action === 'filters' ? '调整筛选' : '重新推荐';
+  setPanel('error');
+}
+
 function renderResult() {
   const place = currentPlace();
-  if (!place) return setPanel('error');
+  renderFilterSummary();
+  if (!place) {
+    if (state.metadataLoading) return setPanel('loading');
+    return showError('没有符合条件的地点', filterEmptyMessage(), 'filters');
+  }
   $('#resultKicker').textContent = state.index === 0 ? currentScenario().title : '换一个选择';
   $('#placeName').textContent = place.name;
   $('#reasonChips').innerHTML = reasonChips(place).map((chip) => `<span class="reason-chip">${escapeHtml(chip)}</span>`).join('');
@@ -423,11 +609,12 @@ function renderResult() {
   $('#navigateButton').href = mapUrl(place);
   $('#saveButton').classList.toggle('saved', isFavorite(place));
   $('#saveButton').setAttribute('aria-label', isFavorite(place) ? '取消收藏' : '收藏这家');
+  $('#recommendation').dataset.distance = String(Math.round(place.distance));
   $('#remainingText').textContent = state.places.length > 1 ? `还有 ${state.places.length - 1} 个选择` : '附近只找到这一个';
   renderVisual(place);
 
   const alternatives = [1, 2].map((step) => state.places[(state.index + step) % state.places.length]).filter((item, index, all) => item && item.id !== place.id && all.findIndex((other) => other.id === item.id) === index);
-  $('#alternatives').innerHTML = alternatives.map((item, index) => `<button class="alternative" data-place-id="${escapeHtml(item.id)}" type="button"><span class="alternative-index">${index + 2}</span><span class="alternative-copy"><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(reasonFor(item))}</span></span><span class="alternative-distance">${escapeHtml(distanceText(item.distance))}</span></button>`).join('');
+  $('#alternatives').innerHTML = alternatives.map((item, index) => `<button class="alternative" data-place-id="${escapeHtml(item.id)}" data-distance="${Math.round(item.distance)}" type="button"><span class="alternative-index">${index + 2}</span><span class="alternative-copy"><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(reasonFor(item))}</span></span><span class="alternative-distance">${escapeHtml(distanceText(item.distance))}</span></button>`).join('');
   $$('[data-place-id]').forEach((button) => { button.onclick = () => { const target = state.places.findIndex((item) => item.id === button.dataset.placeId); if (target >= 0) { state.index = target; renderResult(); window.scrollTo({ top: 0, behavior: 'smooth' }); } }; });
   setPanel('result');
 }
@@ -440,17 +627,34 @@ async function loadPlaces({ force = false } = {}) {
   } else if (!state.rawPlaces.length) setPanel('loading');
   else { rankPlaces(); renderResult(); }
 
-  if (!force && cached.length) return;
   state.request?.abort();
   const controller = new AbortController(); state.request = controller;
   try {
+    if (!force && cached.length) {
+      const needsEnrichment = cached.some((place) => !place.metadataLoaded || (!place.image && (place.wikidata || place.wikipedia)));
+      if (!needsEnrichment) return;
+      state.metadataLoading = relevantInterestIds().length > 0 && !state.places.length;
+      if (state.metadataLoading) setPanel('loading');
+      const enrichedCache = await enrichPlaces(cached, controller.signal);
+      state.rawPlaces = enrichedCache; state.metadataLoading = false; writeCachedPlaces(enrichedCache); rankPlaces(); renderResult();
+      return;
+    }
+
     const places = await fetchNearbyPlaces(controller.signal);
-    state.rawPlaces = places; state.index = 0; writeCachedPlaces(places); rankPlaces(); renderResult();
+    state.rawPlaces = places; state.index = 0;
+    const waitForMetadata = relevantInterestIds().length > 0 && places.some((place) => !place.metadataLoaded);
+    state.metadataLoading = waitForMetadata;
+    if (waitForMetadata) setPanel('loading');
+    else { rankPlaces(); renderResult(); }
+
+    const enriched = await enrichPlaces(places, controller.signal);
+    state.rawPlaces = enriched; state.metadataLoading = false; writeCachedPlaces(enriched); rankPlaces(); renderResult();
   } catch (error) {
     if (error.name === 'AbortError') return;
+    state.metadataLoading = false;
     if (state.rawPlaces.length) { rankPlaces(); renderResult(); toast('已显示最近一次结果'); }
-    else { $('#errorText').textContent = '位置已经拿到，地点服务暂时没有返回。你可以重试，或者直接去地图查看。'; setPanel('error'); }
-  } finally { if (state.request === controller) state.request = null; }
+    else showError('附近地点暂时不可用', '位置已经拿到，地点服务暂时没有返回。你可以重试，或者直接去地图查看。');
+  } finally { if (state.request === controller) state.request = null; state.metadataLoading = false; }
 }
 
 function locate() {
@@ -461,7 +665,7 @@ function locate() {
     loadPlaces({ force: true });
     return;
   }
-  if (!navigator.geolocation) { $('#errorText').textContent = '当前浏览器不支持定位，请直接在地图查看附近地点。'; setPanel('error'); return; }
+  if (!navigator.geolocation) { showError('无法使用定位', '当前浏览器不支持定位，请直接在地图查看附近地点。'); return; }
   state.locating = true; $('#locationText').textContent = '正在定位';
   if (state.rawPlaces.length) { rankPlaces(); renderResult(); } else setPanel('loading');
   navigator.geolocation.getCurrentPosition(({ coords }) => {
@@ -473,7 +677,7 @@ function locate() {
       loadPlaces(); toast('定位未更新，继续使用上次位置'); return;
     }
     $('#locationText').textContent = '需要位置';
-    $('#errorText').textContent = '没有拿到定位权限。请在浏览器的位置权限里选择“允许”，再点重新推荐。'; setPanel('error');
+    showError('需要位置权限', '没有拿到定位权限。请在浏览器的位置权限里选择“允许”，再点重新推荐。');
   }, { enableHighAccuracy: false, timeout: 9000, maximumAge: 15 * 60 * 1000 });
 }
 
@@ -490,7 +694,9 @@ function openDialog(dialog) {
 function openDetail(place) {
   if (!place) return;
   state.activeDetail = place;
-  const detailImage = place.image ? `<img src="${escapeHtml(place.image)}" alt="${escapeHtml(place.name)}的门店实景" referrerpolicy="no-referrer" />` : '<span class="pin-shape"></span>';
+  const detailImage = place.image
+    ? `<img src="${escapeHtml(place.image)}" alt="${escapeHtml(place.name)}的真实地点图片" referrerpolicy="no-referrer" />`
+    : `<iframe title="${escapeHtml(place.name)}位置地图" loading="lazy" src="${escapeHtml(mapEmbedUrl(place))}"></iframe>`;
   $('#detailContent').innerHTML = `
     <div class="detail-hero">${detailImage}</div>
     <h1>${escapeHtml(place.name)}</h1>
@@ -505,17 +711,19 @@ function openDetail(place) {
       ${detailFact('电话', place.phone, place.phone ? `tel:${place.phone}` : '')}
       ${detailFact('营业时间', place.openingHours)}
       ${detailFact('官网', place.website ? '打开官网' : '', place.website)}
-      ${detailFact('图片', place.image ? '真实地点图片' : '暂无可验证的门店实景')}
+      ${detailFact('画面', place.image ? '真实地点图片' : '位置地图')}
     </dl>
     <div class="detail-actions">
       <a class="primary wide" href="${escapeHtml(mapUrl(place))}" target="_blank" rel="noopener">开始导航</a>
       <button class="secondary" id="detailFavorite" type="button">${isFavorite(place) ? '取消收藏' : '下次再去'}</button>
       <button class="secondary" id="detailShare" type="button">分享</button>
-      <a class="secondary" href="${escapeHtml(reviewUrl(place))}" target="_blank" rel="noopener">搜索点评</a>
+      <button class="secondary" id="detailDianping" type="button">大众点评</button>
       <a class="secondary" href="${escapeHtml(appleMapsUrl(place))}" target="_blank" rel="noopener">苹果地图</a>
     </div>`;
   $('#detailFavorite').onclick = () => { toggleFavorite(place); openDetail(place); };
   $('#detailShare').onclick = () => sharePlace(place);
+  $('#detailDianping').onclick = () => openDianping(place);
+  $('#detailContent .detail-hero img')?.addEventListener('error', () => { place.image = ''; openDetail(place); }, { once: true });
   const dialog = $('#detailDialog'); if (!dialog.open) openDialog(dialog);
 }
 
@@ -566,8 +774,8 @@ function renderPreferences() {
     container.innerHTML = items.map(([id, label]) => `<button class="interest-chip ${state.selectedInterests.has(id) ? 'active' : ''}" data-interest="${id}" type="button">${label}</button>`).join('');
   });
   $$('[data-range]').forEach((button) => button.classList.toggle('active', button.dataset.range === state.range));
-  const rangeLabels = { near: '约 780 米', comfortable: '约 1.6 公里', explore: '约 2.3 公里' };
-  $('#rangeHint').textContent = rangeLabels[state.range];
+  $('#rangeHint').textContent = `最多 ${rangeLabels[state.range]}`;
+  renderFilterSummary();
   $$('[data-interest]').forEach((button) => button.onclick = () => {
     const id = button.dataset.interest;
     if (state.selectedInterests.has(id)) state.selectedInterests.delete(id); else state.selectedInterests.add(id);
@@ -596,7 +804,11 @@ $$('.mood').forEach((button) => button.onclick = () => selectMood(button.dataset
 $$('.occasion').forEach((button) => button.onclick = () => selectOccasion(button.dataset.occasion));
 $('#startLocate').onclick = locate;
 $('#locationButton').onclick = locate;
-$('#retryButton').onclick = () => state.coords ? loadPlaces({ force: true }) : locate();
+$('#retryButton').onclick = () => {
+  if (state.errorAction === 'filters') { renderPreferences(); openDialog($('#preferencesDialog')); }
+  else if (state.coords) loadPlaces({ force: true });
+  else locate();
+};
 $('#shuffleButton').onclick = () => {
   if (state.places.length < 2) return toast('附近暂时只有这一个合适的');
   state.index = (state.index + 1) % state.places.length; renderResult();
@@ -605,14 +817,16 @@ $('#saveButton').onclick = () => toggleFavorite(currentPlace());
 $('#shareButton').onclick = () => sharePlace(currentPlace());
 $('#detailButton').onclick = () => openDetail(currentPlace());
 $('#placeVisual').onclick = () => openDetail(currentPlace());
+$('#placeVisual').onkeydown = (event) => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); openDetail(currentPlace()); } };
 $('#preferencesButton').onclick = () => { renderPreferences(); openDialog($('#preferencesDialog')); };
+$('#filterSummary').onclick = () => { renderPreferences(); openDialog($('#preferencesDialog')); };
 $('#favoritesButton').onclick = () => { renderFavorites(); openDialog($('#favoritesDialog')); };
 $('#clearPreferences').onclick = () => {
   state.selectedInterests.clear(); localStorage.setItem(STORAGE.interests, '[]'); state.preferencesDirty = true; renderPreferences();
   if (state.rawPlaces.length) { rankPlaces(); renderResult(); } toast('偏好已清空');
 };
 $$('[data-range]').forEach((button) => button.onclick = () => {
-  state.range = button.dataset.range; localStorage.setItem(STORAGE.range, state.range); renderPreferences();
+  state.range = button.dataset.range; localStorage.setItem(STORAGE.range, state.range); state.preferencesDirty = true; renderPreferences();
   if (state.rawPlaces.length) { state.index = 0; rankPlaces(); renderResult(); }
 });
 $$('[data-close]').forEach((button) => button.onclick = () => $(`#${button.dataset.close}`).close());
