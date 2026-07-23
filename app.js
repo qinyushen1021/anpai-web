@@ -80,6 +80,13 @@ const interestSearchQueries = {
   bookstore: ['bookstore'], park: ['park'], shopping: ['shopping mall'], game: ['game centre'], sports: ['sports centre','bowling'],
   market: ['market'], live: ['theatre','music venue'], spa: ['spa'], ktv: ['karaoke']
 };
+const interestCategoryCompat = {
+  sichuan: ['food'], hotpot: ['food'], bbq: ['food'], noodles: ['food'], japanese: ['food'], korean: ['food'],
+  western: ['food'], cantonese: ['food'], southeastAsian: ['food'], dimsum: ['food'], snack: ['food'], vegetarian: ['food'],
+  coffee: ['cafe'], tea: ['cafe','sweet'], dessert: ['sweet','cafe'], bar: ['night'], movie: ['activity'],
+  exhibition: ['culture'], bookstore: ['shop'], park: ['park'], shopping: ['shop'], game: ['activity'], sports: ['activity'],
+  market: ['shop','activity'], live: ['culture','activity'], spa: ['activity'], ktv: ['activity','night']
+};
 
 const overpassFilters = {
   food: ['["amenity"~"restaurant|fast_food|food_court"]'],
@@ -171,13 +178,13 @@ function cacheKey() {
 
 function readCachedPlaces() {
   try {
-    const cached = JSON.parse(localStorage.getItem(`anpai-result-v5:${cacheKey()}`));
+    const cached = JSON.parse(localStorage.getItem(`anpai-result-v6:${cacheKey()}`));
     return cached && Date.now() - cached.savedAt < 7 * 24 * 60 * 60 * 1000 ? cached.places : [];
   } catch { return []; }
 }
 
 function writeCachedPlaces(places) {
-  try { localStorage.setItem(`anpai-result-v5:${cacheKey()}`, JSON.stringify({ savedAt: Date.now(), places })); } catch { /* storage can be unavailable */ }
+  try { localStorage.setItem(`anpai-result-v6:${cacheKey()}`, JSON.stringify({ savedAt: Date.now(), places })); } catch { /* storage can be unavailable */ }
 }
 
 function updateFavoriteCount() {
@@ -284,7 +291,8 @@ function normalizePlaces(elements, origin, mood) {
       openingHours: tags.opening_hours || '', cuisine: tags.cuisine || '', rating: ratingValue > 0 && ratingValue <= 5 ? ratingValue : null,
       averageCost: averageCost ? Number(averageCost) : null, evidence, source: 'OpenStreetMap',
       osmId: String(item.osmId || item.id || ''), osmType: normalizedOsmType(item.osmType || item.type),
-      wikidata: tags.wikidata || '', wikipedia: tags.wikipedia || '', metadataLoaded: item.type !== 'photon'
+      wikidata: tags.wikidata || '', wikipedia: tags.wikipedia || '', wikimediaCommons: tags.wikimedia_commons || '',
+      searchIntentIds: item.searchIntentIds || [], metadataLoaded: item.type !== 'photon'
     };
   }).filter(Boolean);
 }
@@ -314,6 +322,13 @@ function photonQueries() {
   return uniq(queries).slice(0, 6);
 }
 
+function interestIdsForSearchQuery(query) {
+  const active = new Set(relevantInterestIds());
+  return Object.entries(interestSearchQueries)
+    .filter(([id, queries]) => active.has(id) && queries.includes(query))
+    .map(([id]) => id);
+}
+
 async function fetchPhotonDirect(lat, lon, mood, parentSignal) {
   const request = async (query) => {
     const params = new URLSearchParams({ q: query, lat, lon, limit: '20' });
@@ -321,7 +336,9 @@ async function fetchPhotonDirect(lat, lon, mood, parentSignal) {
     try {
       const response = await fetch(`https://photon.komoot.io/api/?${params}`, { signal: timeout.signal });
       if (!response.ok) throw new Error(`Photon ${response.status}`);
-      const payload = await response.json(); return payload.features || [];
+      const payload = await response.json();
+      const searchIntentIds = interestIdsForSearchQuery(query);
+      return (payload.features || []).map((feature) => ({ ...feature, searchIntentIds }));
     } finally { timeout.done(); }
   };
   const batches = await Promise.allSettled(photonQueries().map(request));
@@ -331,6 +348,7 @@ async function fetchPhotonDirect(lat, lon, mood, parentSignal) {
     return {
       type: 'photon', id: p.osm_id || `${item.geometry?.coordinates?.[0]}-${item.geometry?.coordinates?.[1]}`,
       osmId: p.osm_id, osmType: p.osm_type,
+      searchIntentIds: item.searchIntentIds || [],
       lat: Number(item.geometry?.coordinates?.[1]), lon: Number(item.geometry?.coordinates?.[0]),
       tags: { name: p.name, [p.osm_key]: p.osm_value, address: [p.district, p.street, p.housenumber, p.city].filter(Boolean).join(' '), website: p.website, phone: p.phone }
     };
@@ -368,7 +386,8 @@ function enrichPlaceFromTags(place, tags = {}) {
     openingHours: tags.opening_hours || place.openingHours, cuisine: tags.cuisine || place.cuisine,
     rating: ratingValue > 0 && ratingValue <= 5 ? ratingValue : place.rating,
     averageCost: averageCost ? Number(averageCost) : place.averageCost, evidence,
-    wikidata: tags.wikidata || place.wikidata, wikipedia: tags.wikipedia || place.wikipedia, metadataLoaded: true
+    wikidata: tags.wikidata || place.wikidata, wikipedia: tags.wikipedia || place.wikipedia,
+    wikimediaCommons: tags.wikimedia_commons || place.wikimediaCommons, metadataLoaded: true
   };
 }
 
@@ -408,11 +427,26 @@ async function fetchWikipediaImage(reference, signal) {
   return safeURL(payload.thumbnail?.source || payload.originalimage?.source);
 }
 
+async function fetchCommonsImage(reference, signal) {
+  const match = String(reference || '').match(/^Category:(.+)$/i);
+  if (!match) return '';
+  const params = new URLSearchParams({
+    action: 'query', generator: 'categorymembers', gcmtitle: `Category:${match[1]}`, gcmtype: 'file',
+    gcmlimit: '3', prop: 'imageinfo', iiprop: 'url', iiurlwidth: '1200', format: 'json', origin: '*'
+  });
+  const response = await fetch(`https://commons.wikimedia.org/w/api.php?${params}`, { signal });
+  if (!response.ok) return '';
+  const pages = Object.values((await response.json()).query?.pages || {});
+  return safeURL(pages.map((page) => page.imageinfo?.[0]?.thumburl || page.imageinfo?.[0]?.url).find(Boolean));
+}
+
 async function enrichVerifiedImages(places, signal) {
-  const candidates = places.filter((place) => !place.image && (place.wikidata || place.wikipedia)).slice(0, 10);
+  const candidates = places.filter((place) => !place.image && (place.wikidata || place.wikipedia || place.wikimediaCommons)).slice(0, 14);
   const images = new Map();
   await Promise.allSettled(candidates.map(async (place) => {
-    const image = await fetchWikidataImage(place.wikidata, signal).catch(() => '') || await fetchWikipediaImage(place.wikipedia, signal).catch(() => '');
+    const image = await fetchWikidataImage(place.wikidata, signal).catch(() => '')
+      || await fetchWikipediaImage(place.wikipedia, signal).catch(() => '')
+      || await fetchCommonsImage(place.wikimediaCommons, signal).catch(() => '');
     if (image) images.set(place.id, image);
   }));
   return places.map((place) => images.has(place.id) ? { ...place, image: images.get(place.id), imageSource: 'Wikimedia Commons' } : place);
@@ -476,6 +510,7 @@ function stableOccasionBias(place, occasion) {
 }
 
 function matchesInterest(place, id) {
+  if (place.searchIntentIds?.includes(id) && (interestCategoryCompat[id] || []).includes(place.category)) return true;
   const text = placeText(place);
   const direct = matchesAny(text, interestLookup.get(id)?.keywords || []).length > 0;
   if (direct) return true;
@@ -553,20 +588,27 @@ function mapEmbedUrl(place) {
   return `https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(bbox)}&layer=mapnik&marker=${place.lat}%2C${place.lon}`;
 }
 function dianpingAppUrl(place) { return `dianping://searchshoplist?keyword=${encodeURIComponent(place.name)}`; }
+function currentDianpingKeyword() {
+  return relevantInterestIds().map((id) => interestLookup.get(id)?.label).find(Boolean) || moodCopy[state.mood].empty;
+}
 function dianpingWebUrl(place) {
   if ((place.address || '').includes('上海')) return `https://www.dianping.com/search/keyword/1/0_${encodeURIComponent(place.name)}`;
   return 'https://www.dianping.com/';
 }
-function openDianping(place) {
-  const fallback = dianpingWebUrl(place);
+function openAppWithFallback(appUrl, fallback) {
   let leftPage = false;
   const onVisibility = () => { if (document.hidden) leftPage = true; };
   document.addEventListener('visibilitychange', onVisibility, { once: true });
-  window.location.href = dianpingAppUrl(place);
+  window.location.href = appUrl;
   setTimeout(() => {
     document.removeEventListener('visibilitychange', onVisibility);
     if (!leftPage) window.location.href = fallback;
   }, 1200);
+}
+function openDianping(place) { openAppWithFallback(dianpingAppUrl(place), dianpingWebUrl(place)); }
+function openDianpingSearch() {
+  const keyword = currentDianpingKeyword();
+  openAppWithFallback(`dianping://searchshoplist?keyword=${encodeURIComponent(keyword)}`, 'https://www.dianping.com/');
 }
 function isFavorite(place) { return state.favorites.some((item) => item.id === place.id); }
 
@@ -611,6 +653,7 @@ function renderResult() {
   $('#saveButton').setAttribute('aria-label', isFavorite(place) ? '取消收藏' : '收藏这家');
   $('#recommendation').dataset.distance = String(Math.round(place.distance));
   $('#remainingText').textContent = state.places.length > 1 ? `还有 ${state.places.length - 1} 个选择` : '附近只找到这一个';
+  $('#dianpingMoreButton').classList.toggle('hidden', state.places.length >= 3);
   renderVisual(place);
 
   const alternatives = [1, 2].map((step) => state.places[(state.index + step) % state.places.length]).filter((item, index, all) => item && item.id !== place.id && all.findIndex((other) => other.id === item.id) === index);
@@ -809,6 +852,8 @@ $('#retryButton').onclick = () => {
   else if (state.coords) loadPlaces({ force: true });
   else locate();
 };
+$('#dianpingSearchButton').onclick = openDianpingSearch;
+$('#dianpingMoreButton').onclick = openDianpingSearch;
 $('#shuffleButton').onclick = () => {
   if (state.places.length < 2) return toast('附近暂时只有这一个合适的');
   state.index = (state.index + 1) % state.places.length; renderResult();
