@@ -54,6 +54,11 @@ button:disabled { opacity: .5; cursor: default; }
 .occasion small { margin-top: 3px; font-size: 9px; font-weight: 650; }
 .occasion.active { border-color: var(--line); background: var(--surface); color: var(--ink); }
 .occasion.active small { color: var(--accent); }
+.filter-summary { width: 100%; min-height: 42px; margin-top: 10px; padding: 0 12px; display: flex; align-items: center; gap: 9px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); text-align: left; cursor: pointer; }
+.filter-summary svg { width: 18px; height: 18px; flex: none; fill: none; stroke: var(--accent); stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.9; }
+.filter-summary span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 760; }
+.filter-summary small { color: var(--accent); font-size: 11px; font-weight: 780; }
+.filter-summary.has-preferences { border-color: rgba(215,44,74,.32); background: var(--soft-accent); }
 
 .state-panel, .error-panel { min-height: 330px; padding: 34px 24px; display: grid; place-content: center; justify-items: center; border-radius: var(--radius); background: var(--surface); text-align: center; }
 .state-symbol { width: 76px; height: 76px; margin-bottom: 20px; display: grid; place-items: center; border-radius: 24px; background: var(--soft-accent); }
@@ -87,6 +92,7 @@ button:disabled { opacity: .5; cursor: default; }
 .recommendation > p { margin: 10px 0 0; color: var(--muted); font-size: 14px; line-height: 1.5; font-weight: 620; }
 .place-visual { position: relative; width: 100%; height: 188px; margin: 20px 0 12px; padding: 0; overflow: hidden; display: grid; place-items: center; border: 0; border-radius: 14px; background: #242721; cursor: pointer; }
 .place-visual img { width: 100%; height: 100%; object-fit: cover; }
+.place-visual iframe, .detail-hero iframe { width: 100%; height: 100%; border: 0; pointer-events: none; filter: saturate(.78) contrast(.96); }
 .place-visual .pin-shape { border-color: rgba(255,255,255,.8); transform: rotate(-45deg) scale(1.2); }
 .place-visual .pin-shape::after { background: #242721; }
 .visual-note { position: absolute; right: 10px; bottom: 10px; padding: 5px 7px; border-radius: 7px; background: rgba(15,15,12,.7); color: #fff; font-size: 10px; font-weight: 750; }
@@ -130,11 +136,12 @@ button:disabled { opacity: .5; cursor: default; }
 .detail-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .detail-actions .wide { grid-column: 1 / -1; }
 
+.filter-help { margin: 0 0 22px; padding: 11px 12px; border-radius: 10px; background: var(--soft-accent); color: var(--accent); font-size: 12px; font-weight: 680; line-height: 1.45; }
 .preference-section { margin-bottom: 28px; }
 .preference-section h2 { margin: 0 0 12px; font-size: 18px; letter-spacing: -.02em; }
 .section-title { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
 .section-title span { margin-bottom: 12px; color: var(--muted); font-size: 11px; }
-.range-switch { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+.range-switch { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
 .range-switch button { min-height: 66px; padding: 9px 4px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); cursor: pointer; }
 .range-switch strong, .range-switch small { display: block; }
 .range-switch strong { font-size: 12px; }
