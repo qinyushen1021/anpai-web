@@ -887,6 +887,9 @@ function start() {
   renderPreferences();
   persistPreferences();
   updateFavoriteCount();
+  if (CONFIG.amapKey && CONFIG.amapSecurityCode) loadAmap().catch(() => {
+    // The public-map fallback remains available if the SDK is temporarily unreachable.
+  });
   const testCoords = localTestCoordinates();
   if (testCoords) {
     setLocation(testCoords, '测试位置');
